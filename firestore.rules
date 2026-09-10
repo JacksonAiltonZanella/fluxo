@@ -1,0 +1,203 @@
+rules_version = '2';
+
+// Regras de segurança do Fluxo.
+// Fonte real de autorização: nada aqui confia no papel que o cliente afirma
+// ter — todo controle de acesso é recalculado a partir do próprio banco.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Helpers ----------
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function callerEmail() {
+      return isSignedIn() && request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : '';
+    }
+
+    // Os dois e-mails administrativos têm acesso total e fixo — não podem
+    // ser alterados pela interface (ver regra de update de users abaixo).
+    function isAdmin() {
+      return callerEmail() in [
+        'jacksonzanella69@gmail.com',
+        'jackson.zanella@ciss.com.br'
+      ];
+    }
+
+    function callerStoredRole() {
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(path) ? get(path).data.role : 'leitura';
+    }
+
+    function isEditorOrAdmin() {
+      return isSignedIn() && (isAdmin() || callerStoredRole() == 'editor');
+    }
+
+    function isValidPriority(p) {
+      return p in ['Alto', 'Baixa', 'Para Hoje', 'Para Amanhã', 'Para essa semana', 'Acompanhar'];
+    }
+
+    function isValidStatus(s) {
+      return s in ['Pendente', 'Em andamento', 'Acompanhar', 'Pronto'];
+    }
+
+    function isValidDueDate(d) {
+      return d == null || (d is string && d.size() <= 10);
+    }
+
+    // Usa data.get(campo, default) em vez de data.campo: em consultas "list"
+    // (como o array-contains de sharedWith), o Firestore precisa provar que a
+    // regra vale sem depender de campos que a própria consulta não restringe.
+    // Acesso direto (data.ownerUid) falha com "Property is undefined" nesse
+    // cenário; get() com valor padrão nunca lança esse erro.
+    function taskReadable(data) {
+      return isAdmin()
+        || data.get('ownerUid', null) == request.auth.uid
+        || data.get('assigneeUid', null) == request.auth.uid
+        || (request.auth.uid in data.get('sharedWith', []));
+    }
+
+    // ---------- users ----------
+
+    match /users/{userId} {
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+
+      // Criação do próprio perfil no primeiro login: sempre role "leitura",
+      // e-mail precisa bater com o token autenticado, timestamps de servidor.
+      allow create: if isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.email is string
+        && request.resource.data.email.lower() == callerEmail()
+        && request.resource.data.role == 'leitura'
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 200
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.lastAccessAt == request.time
+        && request.resource.data.keys().hasOnly(
+             ['uid', 'email', 'name', 'photoURL', 'role', 'createdAt', 'lastAccessAt']
+           );
+
+      // O próprio usuário só pode tocar "lastAccessAt" (registro de acesso).
+      // Um admin só pode alterar "role", e nunca dos dois e-mails fixos.
+      allow update: if isSignedIn() && (
+        (
+          request.auth.uid == userId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastAccessAt']) &&
+          request.resource.data.lastAccessAt == request.time
+        ) || (
+          isAdmin() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role']) &&
+          request.resource.data.role in ['leitura', 'editor'] &&
+          !(resource.data.email.lower() in [
+              'jacksonzanella69@gmail.com',
+              'jackson.zanella@ciss.com.br'
+            ])
+        )
+      );
+
+      allow delete: if false;
+    }
+
+    // ---------- tasks ----------
+
+    match /tasks/{taskId} {
+      allow read: if isSignedIn() && taskReadable(resource.data);
+
+      allow create: if isEditorOrAdmin()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerName is string
+        && request.resource.data.ownerName.size() > 0
+        && request.resource.data.status == 'Pendente'
+        && isValidPriority(request.resource.data.priority)
+        && request.resource.data.summary is string
+        && request.resource.data.summary.size() > 0
+        && request.resource.data.summary.size() <= 140
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 2000
+        && isValidDueDate(request.resource.data.dueDate)
+        && request.resource.data.assigneeUid == null
+        && request.resource.data.assigneeName == null
+        && request.resource.data.sharedWith is list
+        && request.resource.data.sharedWith.size() == 0
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.keys().hasOnly([
+             'summary', 'description', 'status', 'priority', 'dueDate',
+             'assigneeUid', 'assigneeName', 'ownerUid', 'ownerName',
+             'sharedWith', 'createdAt', 'updatedAt'
+           ]);
+
+      allow update: if isSignedIn()
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.ownerName == resource.data.ownerName
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        && isValidStatus(request.resource.data.status)
+        && isValidPriority(request.resource.data.priority)
+        && request.resource.data.summary is string
+        && request.resource.data.summary.size() > 0
+        && request.resource.data.summary.size() <= 140
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 2000
+        && isValidDueDate(request.resource.data.dueDate)
+        && request.resource.data.sharedWith is list
+        && request.resource.data.keys().hasOnly([
+             'summary', 'description', 'status', 'priority', 'dueDate',
+             'assigneeUid', 'assigneeName', 'ownerUid', 'ownerName',
+             'sharedWith', 'createdAt', 'updatedAt'
+           ])
+        && (
+          isAdmin()
+          || (
+            // Editor: somente a própria atividade, e não pode reatribuir
+            // responsável nem alterar a lista de compartilhamento — isso é
+            // reservado ao administrador.
+            callerStoredRole() == 'editor'
+            && resource.data.ownerUid == request.auth.uid
+            && request.resource.data.assigneeUid == resource.data.assigneeUid
+            && request.resource.data.assigneeName == resource.data.assigneeName
+            && request.resource.data.sharedWith == resource.data.sharedWith
+          )
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // ---------- tasks/{taskId}/comments ----------
+
+    match /tasks/{taskId}/comments/{commentId} {
+      function parentTask() {
+        return get(/databases/$(database)/documents/tasks/$(taskId)).data;
+      }
+
+      allow read: if isSignedIn() && taskReadable(parentTask());
+
+      allow create: if isEditorOrAdmin()
+        && taskReadable(parentTask())
+        && request.resource.data.authorUid == request.auth.uid
+        && request.resource.data.authorName is string
+        && request.resource.data.authorName.size() > 0
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 2000
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.keys().hasOnly(['text', 'authorUid', 'authorName', 'createdAt']);
+
+      // Comentários fazem parte da trilha de auditoria: não são editáveis nem
+      // excluíveis nesta primeira versão.
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // Qualquer outro caminho é negado por padrão.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
