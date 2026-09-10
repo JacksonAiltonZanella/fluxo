@@ -46,6 +46,12 @@ jobs:
       - name: Testes unitários
         run: npm run test
 
+      - name: Configurar Java (emulador do Firestore exige JDK 21+)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
       - name: Testes das regras do Firestore (emulador)
         run: npx firebase-tools@latest emulators:exec --project demo-fluxo --only firestore "npx vitest run --config vitest.rules.config.ts"
 
