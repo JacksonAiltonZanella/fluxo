@@ -4,8 +4,9 @@ Aplicação web de gestão de atividades em **Grade** (tabela) e **Quadro Kanban
 com login Google, controle de acesso por papéis e comentários por atividade.
 Nome temporário do produto: **Fluxo**.
 
-- **App publicado:** _preencher após o deploy_ — `https://<usuario>.github.io/fluxo/`
-- **Repositório:** _preencher após publicar no GitHub_
+- **App publicado:** https://jacksonailtonzanella.github.io/fluxo/
+- **Repositório:** https://github.com/JacksonAiltonZanella/fluxo
+- **Projeto Firebase:** `fluxo-8e8d7` ([console](https://console.firebase.google.com/project/fluxo-8e8d7))
 
 ---
 
@@ -163,6 +164,10 @@ Os testes de regras cobrem, entre outros cenários:
 
 ## 8. Publicação
 
+> A publicação atual (`fluxo-8e8d7` + GitHub Pages) já está configurada e
+> funcionando. Esta seção documenta como foi feito — útil para recriar o
+> ambiente ou entender a arquitetura, não para reconfigurar do zero.
+
 ### 8.1 GitHub Pages + Actions (frontend)
 
 Já configurado em `.github/workflows/deploy.yml`. A cada push em `main`:
@@ -216,7 +221,20 @@ Depois disso, qualquer pessoa com uma conta Google pode entrar no app — todo
 novo login começa com papel **Leitura**, exceto os dois e-mails
 administrativos fixos, que já entram como Administrador.
 
-## 9. Limitações conhecidas desta primeira versão
+## 9. Notas de operação
+
+- Durante a configuração inicial, uma tentativa automática de criar o
+  projeto ficou registrada no Google Cloud como `fluxo-kanban-app` — é um
+  projeto **vazio, sem Firebase e sem custo**, que pode ser excluído a
+  qualquer momento em https://console.cloud.google.com/. O projeto real em
+  uso é `fluxo-8e8d7`.
+- Não há segredo `FIREBASE_SERVICE_ACCOUNT` configurado ainda, então o job
+  `deploy-firestore-rules` do CI roda e não faz nada (comportamento
+  esperado). As regras já publicadas continuam válidas; para o CI passar a
+  publicar novas alterações em `firestore.rules` automaticamente, siga a
+  seção 8.2.
+
+## 10. Limitações conhecidas desta primeira versão
 
 - Sem Cloud Functions (fora do plano gratuito para uso continuado) — por
   isso o score é derivado no cliente em vez de recalculado no servidor.
